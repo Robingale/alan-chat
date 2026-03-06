@@ -72,7 +72,7 @@ export default function VoiceChatFriend() {
     }
     try {
       setIsSpeaking(true);
-      const response = await fetch("/api/tts", {
+      const response = await fetch("https://alan-chat-two.vercel.app/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
@@ -102,7 +102,7 @@ export default function VoiceChatFriend() {
       setTranscript("");
 
       try {
-        const response = await fetch("/api/chat", {
+        const response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -139,7 +139,7 @@ export default function VoiceChatFriend() {
       content: `[System: The user just opened the chat. Greet them warmly as Alex, introduce yourself in 1 sentence, then naturally bring up ${starter} to get the conversation going. Keep it short and end with a question.]`,
     };
     try {
-      const response = await fetch("/api/chat", {
+      const response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
