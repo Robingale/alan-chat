@@ -120,8 +120,8 @@ export default function VoiceChatFriend() {
           .join("\n");
 
         setMessages((prev) => [...prev, { role: "assistant", content: replyText }]);
-        setIsThinking(false);
-        await speak(replyText.replace(/💡[^\n]*/g, "").trim()); // speak without emoji tips
+	setIsThinking(false);
+	speak(replyText.replace(/💡[^\n]*/g, "").trim()); // speak without emoji tips
       } catch (err) {
         setIsThinking(false);
         setError("Oops, something went wrong. Try again!");
