@@ -388,7 +388,7 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    minHeight: "600px",
+    height: "600px",
   },
   header: {
     display: "flex",
