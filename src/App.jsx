@@ -169,10 +169,11 @@ export default function VoiceChatFriend() {
     setIsSpeaking(false);
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.interimResults = true;
-    recognition.continuous = false;
+const recognition = new SpeechRecognition();
+recognition.lang = "en-US";
+recognition.interimResults = true;
+recognition.continuous = true;
+recognition.maxAlternatives = 1;
 
     recognition.onstart = () => setIsListening(true);
     recognition.onresult = (e) => {
@@ -180,24 +181,32 @@ export default function VoiceChatFriend() {
       setTranscript(t);
     };
     recognition.onend = () => {
-      setIsListening(false);
-      setTranscript((t) => {
-        if (t.trim()) sendMessage(t);
-        return "";
-      });
-    };
+  if (recognitionRef.current && recognitionRef.current._shouldRestart) {
+    recognition.start();
+  } else {
+    setIsListening(false);
+    setTranscript((t) => {
+      if (t.trim()) sendMessage(t);
+      return "";
+    });
+  }
+};
     recognition.onerror = (e) => {
       setIsListening(false);
       if (e.error !== "no-speech") setError(`Voice error: ${e.error}`);
     };
 
-    recognitionRef.current = recognition;
-    recognition.start();
+    recognition._shouldRestart = true;
+recognitionRef.current = recognition;
+recognition.start();
   }, [sendMessage]);
 
   const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-  }, []);
+  if (recognitionRef.current) {
+    recognitionRef.current._shouldRestart = false;
+    recognitionRef.current.stop();
+  }
+}, []);
 
   const formatMessage = (text) => {
     const parts = text.split(/(💡[^\n]*)/g);
