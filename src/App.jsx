@@ -157,8 +157,7 @@ export default function VoiceChatFriend() {
     const starter = TOPIC_STARTERS[Math.floor(Math.random() * TOPIC_STARTERS.length)];
     const initMsg = {
       role: "user",
-      content: `[System: The user just opened the chat. Greet them warmly as Alex, introduce yourself in 1 sentence, then naturally bring up ${starter} to get the conversation going. Keep it short and end with a question.]`,
-    };
+      content: `[System: The user just opened the chat. Greet them warmly as Alex, introduce yourself in 1 sentence, then ask for their name. Once they give their name, use it naturally in the conversation going forward and bring up ${starter} to get the conversation going. Keep it short and friendly.]`,    };
     try {
       const response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
         method: "POST",
