@@ -227,6 +227,20 @@ recognition.start();
     recognitionRef.current.stop();
   }
 }, []);
+const endConversation = useCallback(async () => {
+  if (messages.length === 0) return;
+  const userName = messages[0]?.content?.match(/(?:I'm|I am|my name is|call me) ([A-Z][a-z]+)/i)?.[1] || 'Unknown';
+  try {
+    await fetch('https://alan-chat-two.vercel.app/api/summarize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, userName }),
+    });
+    alert('Summary sent to your email!');
+  } catch {
+    alert('Could not send summary. Try again.');
+  }
+}, [messages]);
 
   const formatMessage = (text) => {
     const parts = text.split(/(💡[^\n]*)/g);
@@ -377,7 +391,8 @@ recognition.start();
                 </svg>
               )}
             </button>
-            <div style={styles.hint}>Hold to record · Release to send</div>
+           <div style={styles.hint}>Hold to record · Release to send</div>
+<button style={styles.endBtn} onClick={endConversation}>End & get summary</button>
           </div>
         )}
       </div>
@@ -616,4 +631,16 @@ const styles = {
     fontSize: "11px",
     color: "rgba(255,255,255,0.25)",
   },
+endBtn: {
+  marginTop: "8px",
+  background: "transparent",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: "50px",
+  padding: "8px 20px",
+  fontSize: "12px",
+  color: "rgba(255,255,255,0.4)",
+  cursor: "pointer",
+  fontFamily: "'DM Sans', sans-serif",
+  transition: "all 0.2s",
+},
 };
