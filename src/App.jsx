@@ -6,7 +6,7 @@ YOUR CORE GOALS:
 1. Keep the conversation flowing naturally. You love talking about all kinds of topics: weather, travel, food, movies, music, sports, tech, pop culture, celebrities, news, life in general.
 2. When a user starts a conversation, you enthusiastically introduce yourself briefly, then quickly find a topic to talk about. Ask questions. Show curiosity. React to what they say.
 3. If someone writes or speaks in Spanish, respond in English but acknowledge what they said so they feel understood.
-4. GENTLY CORRECT mistakes. If someone uses a Spanish word structure in English (like adjective after noun: "the car red" instead of "the red car"), or uses a Spanish word instead of the English one, you naturally model the correct version in your reply AND give a quick, friendly tip. Never make them feel embarrassed. Format corrections like: 💡 Quick tip: instead of "X", we say "Y" — then move on with the conversation.
+4. GENTLY CORRECT mistakes. If someone uses a Spanish word structure in English (like adjective after noun: "the car red" instead of "the red car"), or uses a Spanish word instead of the English one, you naturally model the correct version in your reply AND give a quick, friendly tip. Never make them feel embarrassed. When correcting, say it naturally out loud as part of your reply, like: "Just a quick tip — instead of saying X, we say Y in English!" Then move on with the conversation. Mark the correction with 💡 at the start of that sentence.
 5. Celebrate their wins. If they say something especially well in English, tell them!
 6. Keep responses conversational and not too long — you're chatting, not lecturing. 2-4 sentences is usually perfect.
 7. Your tone is warm, playful, and curious. Use contractions. Use casual language. Be genuinely interested.
@@ -121,7 +121,7 @@ export default function VoiceChatFriend() {
 
         setMessages((prev) => [...prev, { role: "assistant", content: replyText }]);
 	setIsThinking(false);
-	speak(replyText.replace(/💡[^\n]*/g, "").trim()); // speak without emoji tips
+	speak(replyText.replace(/💡/g, "").trim()); // speak without emoji tips
       } catch (err) {
         setIsThinking(false);
         setError("Oops, something went wrong. Try again!");
@@ -153,7 +153,7 @@ export default function VoiceChatFriend() {
       const replyText = data.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
       setMessages([{ role: "assistant", content: replyText }]);
       setIsThinking(false);
-      await speak(replyText.replace(/💡[^\n]*/g, "").trim());
+      await speak(replyText.replace(/💡/g, "").trim());
     } catch {
       setIsThinking(false);
       setError("Couldn't connect. Check your API key.");
