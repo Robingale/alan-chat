@@ -62,9 +62,8 @@ export default function VoiceChatFriend() {
   const [waveAmplitudes, setWaveAmplitudes] = useState([0.2, 0.4, 0.3, 0.5, 0.2]);
 
   const recognitionRef = useRef(null);
-  const audioRef = useRef(null); // current playing Audio object
+  const audioRef = useRef(null);
   const messagesEndRef = useRef(null);
-  const animFrameRef = useRef(null);
   const waveTimerRef = useRef(null);
 
   // Animate waveform
@@ -141,8 +140,8 @@ export default function VoiceChatFriend() {
           .join("\n");
 
         setMessages((prev) => [...prev, { role: "assistant", content: replyText }]);
-	setIsThinking(false);
-	speak(replyText.replace(/💡/g, "").trim()); // speak without emoji tips
+        setIsThinking(false);
+        speak(replyText.replace(/💡/g, "").trim());
       } catch (err) {
         setIsThinking(false);
         setError("Oops, something went wrong. Try again!");
@@ -157,7 +156,8 @@ export default function VoiceChatFriend() {
     const starter = TOPIC_STARTERS[Math.floor(Math.random() * TOPIC_STARTERS.length)];
     const initMsg = {
       role: "user",
-      content: `[System: The user just opened the chat. Greet them warmly as Alex, introduce yourself in 1 sentence, then ask for their name. Once they give their name, use it naturally in the conversation going forward and bring up ${starter} to get the conversation going. Keep it short and friendly.]`,    };
+      content: `[System: The user just opened the chat. Greet them warmly as Alex, introduce yourself in 1 sentence, then ask for their name. Once they give their name, use it naturally in the conversation going forward and bring up ${starter} to get the conversation going. Keep it short and friendly.]`,
+    };
     try {
       const response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
         method: "POST",
@@ -180,67 +180,87 @@ export default function VoiceChatFriend() {
     }
   }, [speak]);
 
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current._shouldRestart = false;
+      recognitionRef.current.stop();
+    }
+  }, []);
+
   const startListening = useCallback(() => {
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
       setError("Your browser doesn't support voice input. Try Chrome.");
       return;
     }
+
+    // If already listening, stop and send
+    if (isListening) {
+      stopListening();
+      return;
+    }
+
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     setIsSpeaking(false);
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-const recognition = new SpeechRecognition();
-recognition.lang = "en-US";
-recognition.interimResults = true;
-recognition.continuous = true;
-recognition.maxAlternatives = 1;
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.maxAlternatives = 1;
+
+    let finalTranscript = "";
 
     recognition.onstart = () => setIsListening(true);
+
     recognition.onresult = (e) => {
-      const t = Array.from(e.results).map((r) => r[0].transcript).join("");
-      setTranscript(t);
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalTranscript += e.results[i][0].transcript + " ";
+        } else {
+          interim = e.results[i][0].transcript;
+        }
+      }
+      setTranscript(finalTranscript + interim);
     };
+
     recognition.onend = () => {
-  if (recognitionRef.current && recognitionRef.current._shouldRestart) {
-    recognition.start();
-  } else {
-    setIsListening(false);
-    setTranscript((t) => {
-      if (t.trim()) sendMessage(t);
-      return "";
-    });
-  }
-};
+      if (recognitionRef.current && recognitionRef.current._shouldRestart) {
+        recognition.start();
+      } else {
+        setIsListening(false);
+        const textToSend = finalTranscript.trim();
+        setTranscript("");
+        finalTranscript = "";
+        if (textToSend) sendMessage(textToSend);
+      }
+    };
+
     recognition.onerror = (e) => {
       setIsListening(false);
       if (e.error !== "no-speech") setError(`Voice error: ${e.error}`);
     };
 
     recognition._shouldRestart = true;
-recognitionRef.current = recognition;
-recognition.start();
-  }, [sendMessage]);
+    recognitionRef.current = recognition;
+    recognition.start();
+  }, [isListening, stopListening, sendMessage]);
 
-  const stopListening = useCallback(() => {
-  if (recognitionRef.current) {
-    recognitionRef.current._shouldRestart = false;
-    recognitionRef.current.stop();
-  }
-}, []);
-const endConversation = useCallback(async () => {
-  if (messages.length === 0) return;
-  const userName = messages[0]?.content?.match(/(?:I'm|I am|my name is|call me) ([A-Z][a-z]+)/i)?.[1] || 'Unknown';
-  try {
-    await fetch('https://alan-chat-two.vercel.app/api/summarize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, userName }),
-    });
-    alert('Summary sent to your email!');
-  } catch {
-    alert('Could not send summary. Try again.');
-  }
-}, [messages]);
+  const endConversation = useCallback(async () => {
+    if (messages.length === 0) return;
+    const userName = messages[0]?.content?.match(/(?:I'm|I am|my name is|call me) ([A-Z][a-z]+)/i)?.[1] || 'Unknown';
+    try {
+      await fetch('https://alan-chat-two.vercel.app/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, userName }),
+      });
+      alert('Summary sent to your email!');
+    } catch {
+      alert('Could not send summary. Try again.');
+    }
+  }, [messages]);
 
   const formatMessage = (text) => {
     const parts = text.split(/(💡[^\n]*)/g);
@@ -358,7 +378,7 @@ const endConversation = useCallback(async () => {
         {hasStarted && (
           <div style={styles.controls}>
             <div style={styles.statusLabel}>
-              {isListening ? "Listening…" : isSpeaking ? "Alex is speaking…" : isThinking ? "Thinking…" : "Tap to speak"}
+              {isListening ? "Tap to send…" : isSpeaking ? "Alex is speaking…" : isThinking ? "Thinking…" : "Tap to speak"}
             </div>
             <button
               style={{
@@ -371,10 +391,7 @@ const endConversation = useCallback(async () => {
                   : "0 8px 24px rgba(99,102,241,0.4)",
                 transform: isListening ? "scale(1.08)" : "scale(1)",
               }}
-              onMouseDown={startListening}
-              onMouseUp={stopListening}
-              onTouchStart={startListening}
-              onTouchEnd={stopListening}
+              onClick={startListening}
               disabled={isSpeaking || isThinking}
             >
               {isListening ? (
@@ -391,8 +408,8 @@ const endConversation = useCallback(async () => {
                 </svg>
               )}
             </button>
-           <div style={styles.hint}>Hold to record · Release to send</div>
-<button style={styles.endBtn} onClick={endConversation}>End & get summary</button>
+            <div style={styles.hint}>Tap to start · Tap again to send</div>
+            <button style={styles.endBtn} onClick={endConversation}>End & get summary</button>
           </div>
         )}
       </div>
@@ -631,16 +648,16 @@ const styles = {
     fontSize: "11px",
     color: "rgba(255,255,255,0.25)",
   },
-endBtn: {
-  marginTop: "8px",
-  background: "transparent",
-  border: "1px solid rgba(255,255,255,0.2)",
-  borderRadius: "50px",
-  padding: "8px 20px",
-  fontSize: "12px",
-  color: "rgba(255,255,255,0.4)",
-  cursor: "pointer",
-  fontFamily: "'DM Sans', sans-serif",
-  transition: "all 0.2s",
-},
+  endBtn: {
+    marginTop: "8px",
+    background: "transparent",
+    border: "1px solid rgba(255,255,255,0.2)",
+    borderRadius: "50px",
+    padding: "8px 20px",
+    fontSize: "12px",
+    color: "rgba(255,255,255,0.4)",
+    cursor: "pointer",
+    fontFamily: "'DM Sans', sans-serif",
+    transition: "all 0.2s",
+  },
 };
