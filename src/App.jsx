@@ -60,19 +60,18 @@ export default function VoiceChatFriend() {
   const [error, setError] = useState(null);
   const [hasStarted, setHasStarted] = useState(false);
   const [waveAmplitudes, setWaveAmplitudes] = useState([0.2, 0.4, 0.3, 0.5, 0.2]);
+  const [lastSpokenText, setLastSpokenText] = useState("");
+  const [ttsError, setTtsError] = useState(false);
 
   const recognitionRef = useRef(null);
   const audioRef = useRef(null);
   const messagesEndRef = useRef(null);
   const waveTimerRef = useRef(null);
 
-  // Animate waveform
   useEffect(() => {
     if (isListening || isSpeaking) {
       waveTimerRef.current = setInterval(() => {
-        setWaveAmplitudes(
-          Array.from({ length: 5 }, () => Math.random() * 0.7 + 0.15)
-        );
+        setWaveAmplitudes(Array.from({ length: 5 }, () => Math.random() * 0.7 + 0.15));
       }, 120);
     } else {
       clearInterval(waveTimerRef.current);
@@ -85,70 +84,90 @@ export default function VoiceChatFriend() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const speak = useCallback(async (text) => {
+  const speak = useCallback(async (text, retryCount = 0) => {
+    if (!text?.trim()) return;
+
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
+
+    setTtsError(false);
+    setIsSpeaking(true);
+    setLastSpokenText(text);
+
     try {
-      setIsSpeaking(true);
       const response = await fetch("https://alan-chat-two.vercel.app/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      if (!response.ok) throw new Error("TTS failed");
+
+      if (!response.ok) throw new Error(`TTS failed: ${response.status}`);
+
       const arrayBuffer = await response.arrayBuffer();
+      if (!arrayBuffer || arrayBuffer.byteLength === 0) throw new Error("Empty audio");
+
       const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
       const url = URL.createObjectURL(blob);
-      await new Promise((resolve) => {
+
+      await new Promise((resolve, reject) => {
         const audio = new Audio(url);
         audioRef.current = audio;
         audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; setIsSpeaking(false); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; setIsSpeaking(false); resolve(); };
-        audio.play().catch(() => { setIsSpeaking(false); resolve(); });
+        audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; reject(new Error("Playback failed")); };
+        audio.play().catch(reject);
       });
-    } catch { setIsSpeaking(false); }
+
+    } catch (err) {
+      setIsSpeaking(false);
+      console.error("TTS error:", err);
+      if (retryCount < 2) {
+        await new Promise(r => setTimeout(r, 1000));
+        await speak(text, retryCount + 1);
+      } else {
+        setTtsError(true);
+      }
+    }
   }, []);
 
-  const sendMessage = useCallback(
-    async (userText) => {
-      if (!userText.trim()) return;
+  const replayLastMessage = useCallback(() => {
+    if (lastSpokenText) {
+      setTtsError(false);
+      speak(lastSpokenText);
+    }
+  }, [lastSpokenText, speak]);
 
-      const newUserMsg = { role: "user", content: userText };
-      const updatedMessages = [...messages, newUserMsg];
-      setMessages(updatedMessages);
-      setIsThinking(true);
-      setTranscript("");
+  const sendMessage = useCallback(async (userText) => {
+    if (!userText.trim()) return;
+    const newUserMsg = { role: "user", content: userText };
+    const updatedMessages = [...messages, newUserMsg];
+    setMessages(updatedMessages);
+    setIsThinking(true);
+    setTranscript("");
+    setTtsError(false);
 
-      try {
-        const response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 1000,
-            system: SYSTEM_PROMPT,
-            messages: updatedMessages,
-          }),
-        });
-
-        const data = await response.json();
-        const replyText = data.content
-          .filter((b) => b.type === "text")
-          .map((b) => b.text)
-          .join("\n");
-
-        setMessages((prev) => [...prev, { role: "assistant", content: replyText }]);
-        setIsThinking(false);
-        speak(replyText.replace(/💡/g, "").trim());
-      } catch (err) {
-        setIsThinking(false);
-        setError("Oops, something went wrong. Try again!");
-      }
-    },
-    [messages, speak]
-  );
+    try {
+      const response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: SYSTEM_PROMPT,
+          messages: updatedMessages,
+        }),
+      });
+      const data = await response.json();
+      const replyText = data.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      setMessages((prev) => [...prev, { role: "assistant", content: replyText }]);
+      setIsThinking(false);
+      speak(replyText.replace(/💡/g, "").trim());
+    } catch {
+      setIsThinking(false);
+      setError("Oops, something went wrong. Try again!");
+    }
+  }, [messages, speak]);
 
   const startConversation = useCallback(async () => {
     setHasStarted(true);
@@ -192,15 +211,10 @@ export default function VoiceChatFriend() {
       setError("Your browser doesn't support voice input. Try Chrome.");
       return;
     }
-
-    // If already listening, stop and send
-    if (isListening) {
-      stopListening();
-      return;
-    }
-
+    if (isListening) { stopListening(); return; }
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     setIsSpeaking(false);
+    setTtsError(false);
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
@@ -212,19 +226,14 @@ export default function VoiceChatFriend() {
     let finalTranscript = "";
 
     recognition.onstart = () => setIsListening(true);
-
     recognition.onresult = (e) => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          finalTranscript += e.results[i][0].transcript + " ";
-        } else {
-          interim = e.results[i][0].transcript;
-        }
+        if (e.results[i].isFinal) { finalTranscript += e.results[i][0].transcript + " "; }
+        else { interim = e.results[i][0].transcript; }
       }
       setTranscript(finalTranscript + interim);
     };
-
     recognition.onend = () => {
       if (recognitionRef.current && recognitionRef.current._shouldRestart) {
         recognition.start();
@@ -236,7 +245,6 @@ export default function VoiceChatFriend() {
         if (textToSend) sendMessage(textToSend);
       }
     };
-
     recognition.onerror = (e) => {
       setIsListening(false);
       if (e.error !== "no-speech") setError(`Voice error: ${e.error}`);
@@ -276,7 +284,6 @@ export default function VoiceChatFriend() {
   return (
     <div style={styles.wrapper}>
       <div style={styles.card}>
-        {/* Header */}
         <div style={styles.header}>
           <div style={styles.avatarWrapper}>
             <div style={styles.avatar}>
@@ -291,24 +298,19 @@ export default function VoiceChatFriend() {
             <div style={styles.name}>Alex</div>
             <div style={styles.subtitle}>English conversation friend</div>
           </div>
-          {/* Waveform */}
           <div style={styles.waveform}>
             {waveAmplitudes.map((amp, i) => (
-              <div
-                key={i}
-                style={{
-                  ...styles.waveBar,
-                  height: `${amp * 36}px`,
-                  opacity: isListening || isSpeaking ? 0.9 : 0.3,
-                  background: isListening ? "#f59e0b" : isSpeaking ? "#34d399" : "#94a3b8",
-                  transition: "height 0.12s ease, opacity 0.3s",
-                }}
-              />
+              <div key={i} style={{
+                ...styles.waveBar,
+                height: `${amp * 36}px`,
+                opacity: isListening || isSpeaking ? 0.9 : 0.3,
+                background: isListening ? "#f59e0b" : isSpeaking ? "#34d399" : "#94a3b8",
+                transition: "height 0.12s ease, opacity 0.3s",
+              }} />
             ))}
           </div>
         </div>
 
-        {/* Messages */}
         <div style={styles.messages}>
           {!hasStarted && !isThinking && (
             <div style={styles.welcomeBox}>
@@ -332,21 +334,9 @@ export default function VoiceChatFriend() {
           )}
 
           {messages.map((msg, idx) => (
-            <div
-              key={idx}
-              style={{
-                ...styles.msgRow,
-                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
-              }}
-            >
-              {msg.role === "assistant" && (
-                <div style={styles.smallAvatar}>A</div>
-              )}
-              <div
-                style={
-                  msg.role === "user" ? styles.userBubble : styles.assistantBubble
-                }
-              >
+            <div key={idx} style={{ ...styles.msgRow, justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
+              {msg.role === "assistant" && <div style={styles.smallAvatar}>A</div>}
+              <div style={msg.role === "user" ? styles.userBubble : styles.assistantBubble}>
                 {msg.role === "assistant" ? formatMessage(msg.content) : msg.content}
               </div>
             </div>
@@ -363,18 +353,24 @@ export default function VoiceChatFriend() {
             </div>
           )}
 
+          {ttsError && (
+            <div style={styles.ttsErrorBox}>
+              <span style={styles.ttsErrorText}>🔇 Audio didn't play</span>
+              <button style={styles.replayBtn} onClick={replayLastMessage}>
+                🔁 Tap to hear Alex
+              </button>
+            </div>
+          )}
+
           {error && <div style={styles.errorMsg}>{error}</div>}
           {transcript && (
             <div style={{ ...styles.msgRow, justifyContent: "flex-end" }}>
-              <div style={{ ...styles.userBubble, opacity: 0.6, fontStyle: "italic" }}>
-                {transcript}…
-              </div>
+              <div style={{ ...styles.userBubble, opacity: 0.6, fontStyle: "italic" }}>{transcript}…</div>
             </div>
           )}
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Controls */}
         {hasStarted && (
           <div style={styles.controls}>
             <div style={styles.statusLabel}>
@@ -383,12 +379,8 @@ export default function VoiceChatFriend() {
             <button
               style={{
                 ...styles.micBtn,
-                background: isListening
-                  ? "linear-gradient(135deg, #f59e0b, #ef4444)"
-                  : "linear-gradient(135deg, #6366f1, #8b5cf6)",
-                boxShadow: isListening
-                  ? "0 0 0 8px rgba(245,158,11,0.2), 0 8px 24px rgba(239,68,68,0.4)"
-                  : "0 8px 24px rgba(99,102,241,0.4)",
+                background: isListening ? "linear-gradient(135deg, #f59e0b, #ef4444)" : "linear-gradient(135deg, #6366f1, #8b5cf6)",
+                boxShadow: isListening ? "0 0 0 8px rgba(245,158,11,0.2), 0 8px 24px rgba(239,68,68,0.4)" : "0 8px 24px rgba(99,102,241,0.4)",
                 transform: isListening ? "scale(1.08)" : "scale(1)",
               }}
               onClick={startListening}
@@ -608,6 +600,32 @@ const styles = {
     borderRadius: "50%",
     background: "rgba(255,255,255,0.4)",
     animation: "bounce 1.2s infinite ease-in-out",
+  },
+  ttsErrorBox: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "8px",
+    padding: "12px",
+    background: "rgba(245,158,11,0.08)",
+    border: "1px solid rgba(245,158,11,0.2)",
+    borderRadius: "12px",
+    animation: "fadeIn 0.3s ease",
+  },
+  ttsErrorText: {
+    fontSize: "12px",
+    color: "rgba(255,255,255,0.4)",
+  },
+  replayBtn: {
+    background: "linear-gradient(135deg, #f59e0b, #d97706)",
+    color: "#fff",
+    border: "none",
+    borderRadius: "50px",
+    padding: "8px 20px",
+    fontSize: "13px",
+    fontWeight: "600",
+    cursor: "pointer",
+    fontFamily: "'DM Sans', sans-serif",
   },
   errorMsg: {
     textAlign: "center",
