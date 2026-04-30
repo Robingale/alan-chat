@@ -51,6 +51,15 @@ const TOPIC_STARTERS = [
   "news or current events",
 ];
 
+// Split text into speakable sentences
+function splitIntoSentences(text) {
+  return text
+    .replace(/💡/g, "")
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 2);
+}
+
 export default function VoiceChatFriend() {
   const [messages, setMessages] = useState([]);
   const [isListening, setIsListening] = useState(false);
@@ -67,6 +76,9 @@ export default function VoiceChatFriend() {
   const audioRef = useRef(null);
   const messagesEndRef = useRef(null);
   const waveTimerRef = useRef(null);
+  // Queue of sentences waiting to be spoken
+  const ttsQueueRef = useRef([]);
+  const isSpeakingQueueRef = useRef(false);
 
   useEffect(() => {
     if (isListening || isSpeaking) {
@@ -84,67 +96,84 @@ export default function VoiceChatFriend() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const speak = useCallback(async (text, retryCount = 0) => {
-    if (!text?.trim()) return;
+  // Fetch TTS audio for a single sentence
+  const fetchAudio = useCallback(async (text) => {
+    const response = await fetch("https://alan-chat-two.vercel.app/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) throw new Error(`TTS failed: ${response.status}`);
+    const arrayBuffer = await response.arrayBuffer();
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) throw new Error("Empty audio");
+    const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+    return URL.createObjectURL(blob);
+  }, []);
 
+  // Play one audio URL and wait for it to finish
+  const playAudio = useCallback((url) => {
+    return new Promise((resolve, reject) => {
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; resolve(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; reject(); };
+      audio.play().catch(reject);
+    });
+  }, []);
+
+  // Process the TTS queue one sentence at a time
+  const processQueue = useCallback(async () => {
+    if (isSpeakingQueueRef.current) return;
+    isSpeakingQueueRef.current = true;
+    setIsSpeaking(true);
+
+    while (ttsQueueRef.current.length > 0) {
+      const sentence = ttsQueueRef.current.shift();
+      try {
+        const url = await fetchAudio(sentence);
+        await playAudio(url);
+      } catch {
+        // skip failed sentence, continue with next
+      }
+    }
+
+    isSpeakingQueueRef.current = false;
+    setIsSpeaking(false);
+  }, [fetchAudio, playAudio]);
+
+  // Add a sentence to the queue and start processing if not already running
+  const enqueueSentence = useCallback((sentence) => {
+    if (!sentence.trim()) return;
+    ttsQueueRef.current.push(sentence);
+    if (!isSpeakingQueueRef.current) {
+      processQueue();
+    }
+  }, [processQueue]);
+
+  // Stop all audio and clear queue
+  const stopSpeaking = useCallback(() => {
+    ttsQueueRef.current = [];
+    isSpeakingQueueRef.current = false;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
-
-    setTtsError(false);
-    setIsSpeaking(true);
-    setLastSpokenText(text);
-
-    try {
-      const response = await fetch("https://alan-chat-two.vercel.app/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-
-      if (!response.ok) throw new Error(`TTS failed: ${response.status}`);
-
-      const arrayBuffer = await response.arrayBuffer();
-      if (!arrayBuffer || arrayBuffer.byteLength === 0) throw new Error("Empty audio");
-
-      const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-      const url = URL.createObjectURL(blob);
-
-      await new Promise((resolve, reject) => {
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; setIsSpeaking(false); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; reject(new Error("Playback failed")); };
-        audio.play().catch(reject);
-      });
-
-    } catch (err) {
-      setIsSpeaking(false);
-      console.error("TTS error:", err);
-      if (retryCount < 2) {
-        await new Promise(r => setTimeout(r, 1000));
-        await speak(text, retryCount + 1);
-      } else {
-        setTtsError(true);
-      }
-    }
+    setIsSpeaking(false);
   }, []);
 
+  // Replay last message by re-queueing all its sentences
   const replayLastMessage = useCallback(() => {
-    if (lastSpokenText) {
-      setTtsError(false);
-      speak(lastSpokenText);
-    }
-  }, [lastSpokenText, speak]);
+    if (!lastSpokenText) return;
+    setTtsError(false);
+    stopSpeaking();
+    const sentences = splitIntoSentences(lastSpokenText);
+    sentences.forEach(s => ttsQueueRef.current.push(s));
+    processQueue();
+  }, [lastSpokenText, stopSpeaking, processQueue]);
 
-  const sendMessage = useCallback(async (userText) => {
-    if (!userText.trim()) return;
-    const newUserMsg = { role: "user", content: userText };
-    const updatedMessages = [...messages, newUserMsg];
-    setMessages(updatedMessages);
-    setIsThinking(true);
-    setTranscript("");
+  // Stream Claude response and speak sentence by sentence
+  const sendMessageStreaming = useCallback(async (userText, existingMessages) => {
+    stopSpeaking();
     setTtsError(false);
 
     try {
@@ -154,20 +183,85 @@ export default function VoiceChatFriend() {
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
           max_tokens: 1000,
+          stream: true,
           system: SYSTEM_PROMPT,
-          messages: updatedMessages,
+          messages: existingMessages,
         }),
       });
-      const data = await response.json();
-      const replyText = data.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      setMessages((prev) => [...prev, { role: "assistant", content: replyText }]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = "";
+      let buffer = "";
+      let spokenSoFar = "";
+
       setIsThinking(false);
-      speak(replyText.replace(/💡/g, "").trim());
-    } catch {
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === "content_block_delta" && parsed.delta?.text) {
+              const newText = parsed.delta.text;
+              fullText += newText;
+              buffer += newText;
+
+              // Update the displayed message in real time
+              setMessages(prev => {
+                const updated = [...prev];
+                updated[updated.length - 1] = { role: "assistant", content: fullText };
+                return updated;
+              });
+
+              // Check if buffer contains a complete sentence
+              const sentenceMatch = buffer.match(/^(.*[.!?])\s+/s);
+              if (sentenceMatch) {
+                const sentence = sentenceMatch[1].trim();
+                buffer = buffer.slice(sentenceMatch[0].length);
+                if (sentence && !spokenSoFar.includes(sentence)) {
+                  spokenSoFar += sentence;
+                  enqueueSentence(sentence.replace(/💡/g, ""));
+                }
+              }
+            }
+          } catch { /* skip malformed lines */ }
+        }
+      }
+
+      // Speak any remaining buffer text
+      if (buffer.trim().length > 2) {
+        enqueueSentence(buffer.trim().replace(/💡/g, ""));
+      }
+
+      setLastSpokenText(fullText);
+
+    } catch (err) {
       setIsThinking(false);
       setError("Oops, something went wrong. Try again!");
     }
-  }, [messages, speak]);
+  }, [stopSpeaking, enqueueSentence]);
+
+  const sendMessage = useCallback(async (userText) => {
+    if (!userText.trim()) return;
+    const newUserMsg = { role: "user", content: userText };
+    const updatedMessages = [...messages, newUserMsg];
+
+    // Add placeholder for assistant message
+    setMessages([...updatedMessages, { role: "assistant", content: "" }]);
+    setIsThinking(true);
+    setTranscript("");
+
+    await sendMessageStreaming(userText, updatedMessages);
+  }, [messages, sendMessageStreaming]);
 
   const startConversation = useCallback(async () => {
     setHasStarted(true);
@@ -177,27 +271,11 @@ export default function VoiceChatFriend() {
       role: "user",
       content: `[System: The user just opened the chat. Greet them warmly as Alex, introduce yourself in 1 sentence, then ask for their name. Once they give their name, use it naturally in the conversation going forward and bring up ${starter} to get the conversation going. Keep it short and friendly.]`,
     };
-    try {
-      const response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: SYSTEM_PROMPT,
-          messages: [initMsg],
-        }),
-      });
-      const data = await response.json();
-      const replyText = data.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      setMessages([{ role: "assistant", content: replyText }]);
-      setIsThinking(false);
-      await speak(replyText.replace(/💡/g, "").trim());
-    } catch {
-      setIsThinking(false);
-      setError("Couldn't connect. Check your API key.");
-    }
-  }, [speak]);
+
+    // Add placeholder
+    setMessages([{ role: "assistant", content: "" }]);
+    await sendMessageStreaming("", [initMsg]);
+  }, [sendMessageStreaming]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
@@ -212,8 +290,8 @@ export default function VoiceChatFriend() {
       return;
     }
     if (isListening) { stopListening(); return; }
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-    setIsSpeaking(false);
+
+    stopSpeaking();
     setTtsError(false);
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -253,7 +331,7 @@ export default function VoiceChatFriend() {
     recognition._shouldRestart = true;
     recognitionRef.current = recognition;
     recognition.start();
-  }, [isListening, stopListening, sendMessage]);
+  }, [isListening, stopListening, stopSpeaking, sendMessage]);
 
   const endConversation = useCallback(async () => {
     if (messages.length === 0) return;
@@ -337,21 +415,18 @@ export default function VoiceChatFriend() {
             <div key={idx} style={{ ...styles.msgRow, justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
               {msg.role === "assistant" && <div style={styles.smallAvatar}>A</div>}
               <div style={msg.role === "user" ? styles.userBubble : styles.assistantBubble}>
-                {msg.role === "assistant" ? formatMessage(msg.content) : msg.content}
+                {msg.role === "assistant"
+                  ? msg.content
+                    ? formatMessage(msg.content)
+                    : <span style={styles.typingDots}>
+                        <span style={styles.dot} />
+                        <span style={{ ...styles.dot, animationDelay: "0.2s" }} />
+                        <span style={{ ...styles.dot, animationDelay: "0.4s" }} />
+                      </span>
+                  : msg.content}
               </div>
             </div>
           ))}
-
-          {isThinking && messages.length > 0 && (
-            <div style={{ ...styles.msgRow, justifyContent: "flex-start" }}>
-              <div style={styles.smallAvatar}>A</div>
-              <div style={{ ...styles.assistantBubble, ...styles.thinking }}>
-                <span style={styles.dot} />
-                <span style={{ ...styles.dot, animationDelay: "0.2s" }} />
-                <span style={{ ...styles.dot, animationDelay: "0.4s" }} />
-              </div>
-            </div>
-          )}
 
           {ttsError && (
             <div style={styles.ttsErrorBox}>
@@ -384,7 +459,7 @@ export default function VoiceChatFriend() {
                 transform: isListening ? "scale(1.08)" : "scale(1)",
               }}
               onClick={startListening}
-              disabled={isSpeaking || isThinking}
+              disabled={isThinking}
             >
               {isListening ? (
                 <svg viewBox="0 0 24 24" width="28" height="28" fill="white">
@@ -586,6 +661,12 @@ const styles = {
     fontSize: "13px",
     color: "#fbbf24",
     lineHeight: "1.5",
+  },
+  typingDots: {
+    display: "flex",
+    gap: "6px",
+    alignItems: "center",
+    padding: "2px 0",
   },
   thinking: {
     display: "flex",
