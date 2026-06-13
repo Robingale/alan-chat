@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 const BASE_SYSTEM_PROMPT = `You are Alex, a warm and witty native English speaker who also understands Spanish. You're chatting with someone who wants to improve their conversational English. You're a genuine friend — encouraging, fun, never condescending.
 
