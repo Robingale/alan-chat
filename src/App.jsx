@@ -209,7 +209,7 @@ export default function VoiceChatFriend() {
     var response = await fetch("https://alan-chat-two.vercel.app/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, stream: true, system: systemPrompt, messages: messagesForApi }),
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, stream: true, system: systemPrompt, messages: messagesForApi }),
     });
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
